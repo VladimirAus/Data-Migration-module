@@ -56,7 +56,9 @@ function data_migration_process_images() {
 		//$centers = node_load_multiple(array_keys($result['node']));
 		variable_set('data_migration_centres', $result['node']); 
 		
-		unset($_SESSION['data_migration_batch_results']);
+		if(isset($_SESSION['data_migration_batch_results'])){
+		  unset($_SESSION['data_migration_batch_results']);
+		}
 		$batch = array(
 			'title' => t('Importing images from old CandK sites'),
 			'operations' => array(
@@ -91,7 +93,7 @@ function data_migration_process_images_data(&$context) {
 		$context['results']['failed'] = array();
 	}
 	if(empty($context['results']['errors'])){
-		$context['results']['failed'] = array();
+		$context['results']['errors'] = array();
 	}
 
 	$keys = array_keys($centers);
@@ -191,7 +193,10 @@ function data_migration_process_images_data(&$context) {
 		}
 		
 		node_save($center);
-		$context['message'] = 'Saving centre '.$context['sandbox']['progress'].' of '.$context['sandbox']['max'].' from '.$urls[$context['sandbox']['progress']];
+		
+		// got undefined error on $urls
+		//$context['message'] = 'Saving centre '.$context['sandbox']['progress'].' of '.$context['sandbox']['max'].' from '.$urls[$context['sandbox']['progress']];
+		$context['message'] = 'Saving centre '.$context['sandbox']['progress'].' of '.$context['sandbox']['max'].' from '.$siteurl;
 		
 	}
 	}catch(Exception $e){
