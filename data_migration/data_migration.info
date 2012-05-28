@@ -1,0 +1,7 @@
+name = C and K data migration
+description = Getting and parsign the data.
+core = 7.x
+
+files[] = data_migration.module
+
+package = "iFactory"

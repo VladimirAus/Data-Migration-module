@@ -1,0 +1,612 @@
+<?php 
+
+function data_migration_menu(){
+	$items = array();
+	/*
+	$items['admin/config/development/docos_custom'] = array(
+		//'page callback' => 'docos_custom_import_docos',
+		'title' => 'import docos',
+		'description' => 'Import Documentaries from topdocumentaryfilms',
+		'page callback' => 'drupal_get_form',
+		'page arguments' => array('docos_custom_admin_settings'),
+		'access arguments' => array('administer site configuration'),
+	);
+	*/
+	$items['ifimport/run/urls'] = array(
+		'title' => 'Process urls',
+		'page callback' => 'data_migration_process_urls',
+		'access callback' => true, 
+		//'access arguments' => array('administer site configuration'),
+	);
+	$items['ifimport/run/data'] = array(
+		'title' => 'Process data',
+		'access callback' => true, 
+		'page callback' => 'data_migration_process_data',
+		//'access arguments' => array('administer site configuration'),
+	);
+	$items['ifimport/run/images'] = array(
+		'title' => 'Process images',
+		'page callback' => 'data_migration_process_images',
+		'access callback' => true, 
+		//'access arguments' => array('administer site configuration'),
+	);
+	$items['ifimport/run/finito'] = array(
+		'title' => 'Finito!',
+		'access callback' => true, 
+		'page callback' => 'data_migration_process_finito',
+		//'access arguments' => array('administer site configuration'),
+	);
+	return $items;
+}
+
+function data_migration_process_images() { 
+	
+	// Get all centers
+	$query = new EntityFieldQuery;
+	$result = $query
+		->entityCondition('entity_type', 'node')
+		->propertyCondition('status', 1)
+		->propertyCondition('type', 'centre')
+		//->fieldCondition('field_answer_qstnref', 'nid', $qstnref, '=')
+		//->fieldCondition('field_answer_companyref', 'nid', $companyNID, '=')
+		->execute();
+	
+	$txt_result = array();
+	if (is_array($result) && isset($result['node'])) {
+		//$centers = node_load_multiple(array_keys($result['node']));
+		variable_set('data_migration_centres', $result['node']); 
+		
+		unset($_SESSION['data_migration_batch_results']);
+		$batch = array(
+			'title' => t('Importing images from old CandK sites'),
+			'operations' => array(
+				array('data_migration_process_images_data', array()),
+			),
+			'finished' => 'data_migration_batch_process_complete',
+			//'file' => 'path_to_file_containing_myfunctions',
+		);
+		batch_set($batch);
+		batch_process();
+	}
+}
+
+function data_migration_process_images_data(&$context) { 
+
+	require_once('simple_html_dom.php');
+	
+	// Setup batch vars
+	$centers = variable_get('data_migration_centres', array());
+	if (empty($context['sandbox'])) {
+		$context['sandbox']['progress'] = 0;
+		//$context['sandbox']['taxonomy'] = taxonomy_get_tree(1);
+		//$context['sandbox']['current_doc'] = '';
+		$context['sandbox']['max'] = count($centers);
+		//$context['sandbox']['max'] = 20;
+	}
+	
+	if(empty($context['results']['completed'])){
+		$context['results']['completed'] = array();
+	}
+	if(empty($context['results']['failed'])){
+		$context['results']['failed'] = array();
+	}
+	if(empty($context['results']['errors'])){
+		$context['results']['failed'] = array();
+	}
+
+	$keys = array_keys($centers);
+	$center = node_load($keys[$context['sandbox']['progress']]);
+	
+	$txt_result = array();
+	//if (is_array($result) && isset($result['node'])) {
+		
+	//require_once('simple_html_dom.php');
+//$centers = $result['node'];
+
+//foreach($centers as $nid => $center_strip) {	
+	//$center = node_load($nid);
+	try {
+	if (!empty($center->field_centre_old_url['und'][0]['value'])) {
+		$docpage = new simple_html_dom();
+		$siteurl = 'http://'.$center->field_centre_old_url['und'][0]['value'];
+		$docpage->load_file($siteurl . '/Photos.aspx');
+		
+		$res_images = $center->title.'<br />'.$center->field_centre_old_url['und'][0]['value'].'<br />';
+		
+		$centredir = safeDir($center->title);
+		
+		// For main information
+		foreach($docpage->find('#dnn_ContentPane img') as $image) {
+			$imgurl = $siteurl . $image->getAttribute('src');
+			
+			// Save actual file
+			$res_images .=  $imgurl . '<br />';
+			
+			$handle = fopen($imgurl, "rb");
+			$contents = '';
+			while (!feof($handle)) {
+				 $contents .= fread($handle, 8192);
+			}
+			fclose($handle);
+
+			$filename_break = explode('/', $imgurl);
+			$filename_new = safeFilename($filename_break[count($filename_break) - 1]);
+			$full_foldername = 'sites/default/files/centres/' . $centredir;
+			$full_filename = $full_foldername .'/' . $filename_new;
+
+			if (!file_exists($full_foldername))
+				drupal_mkdir($full_foldername, NULL, true);
+			while (file_exists($full_filename)) {
+				$filename_new = 'a_' . $filename_new;
+				$full_filename = $full_foldername .'/' . $filename_new;
+			}
+			
+			$fp = fopen($full_filename, 'w');
+			fwrite($fp, $contents);
+			fclose($fp);
+			
+			
+			// Save file to system
+			
+			$imginfo = image_get_info($full_filename);
+			
+			$newFile = new stdClass();
+			$newFile->fid = 0;
+			$newFile->uid = 1;
+			$newFile->filename = $filename_new;
+			$newFile->uri = 'public://centres/' . $centredir .'/'. $filename_new;
+			$newFile->filemime = ($imginfo)?$imginfo['mime_type']:'image/jpeg';
+			$newFile->filesize = ($imginfo)?$imginfo['file_size']:0;
+			$newFile->status = 1;
+			$newFile->timestamp = time();
+			//$newFile->filesize = filesize($full_filename);
+			
+			$newFile = file_save($newFile);
+			file_usage_add($newFile, 'file', 'node', $center->nid);
+			
+			if (empty($center->field_centre_pics['und'][0])) {
+				$center->field_centre_pics = array('und' => array());
+			}
+				
+			$center->field_centre_pics['und'][] = array(
+							'fid' => $newFile->fid,
+							'alt' => '',
+							'title' => '',
+							'width' => ($imginfo)?$imginfo['width']:0,
+							'height' => ($imginfo)?$imginfo['height']:0,
+							'uid' => $newFile->uid,
+							'filename' => $newFile->filename,
+							'uri' => $newFile->uri,
+							'filemime' => $newFile->filemime,
+							'filesize' => $newFile->filesize,
+							'status' => $newFile->status,
+							'timestamp' => $newFile->timestamp,
+							'rdf_mapping' => array(),
+						);
+			
+			
+			
+			//return $res_images;
+			
+		}
+		
+		node_save($center);
+		$context['message'] = 'Saving centre '.$context['sandbox']['progress'].' of '.$context['sandbox']['max'].' from '.$urls[$context['sandbox']['progress']];
+		
+	}
+	}catch(Exception $e){
+		$context['results']['errors'][] = $e->getMessage();
+	}
+	//}
+//}
+
+//dpm($txt_result); // Move to bottom return later
+//return $titles; // Just one at a time	
+//return 'Page';
+	$context['sandbox']['progress']++;
+	
+	if ($context['sandbox']['progress'] != $context['sandbox']['max']) {
+		$context['finished'] = $context['sandbox']['progress'] / $context['sandbox']['max'];
+	}
+
+				
+				
+			//}
+		//}
+	//}
+	
+	//return 'Bwaaaaaaaaa!';
+}
+
+
+function data_migration_process_urls() { 
+
+	// URL data
+	$urls = array('acaciaridge.candk.asn.au', 'albanycreek.candk.asn.au', 'albertpark.candk.asn.au', 'allora.candk.asn.au', 'almastreet.candk.asn.au', 'amaroo.candk.asn.au', 'amberley.candk.asn.au', 'anneshearer.candk.asn.au', 'arana.candk.asn.au', 'arnwood.candk.asn.au', 'arthurstreet.candk.asn.au', 'ascot.candk.asn.au', 'ashgrovewest.candk.asn.au', 'aspleyeast.candk.asn.au', 'atherton.candk.asn.au', 'augusta.candk.asn.au', 'ayr.candk.asn.au', 'babinda.candk.asn.au', 'balaclava.candk.asn.au', 'baldhills.candk.asn.au', 'balonne.candk.asn.au', 'banksiabeach.candk.asn.au', 'banksstreet.candk.asn.au', 'banyo.candk.asn.au', 'barcaldine.candk.asn.au', 'bayview.candk.asn.au', 'bayviewheights.candk.asn.au', 'beachmere.candk.asn.au', 'beaconsfield.candk.asn.au', 'beaudesert.candk.asn.au', 'beaudesertk.candk.asn.au', 'beenleigh.candk.asn.au', 'bellbowrie.candk.asn.au', 'bentleypark.candk.asn.au', 'berserker.candk.asn.au', 'bethlehem.candk.asn.au', 'biggenden.candk.asn.au', 'biloela.candk.asn.au', 'biloelacc.candk.asn.au', 'birralee.candk.asn.au', 'blackall.candk.asn.au', 'blackbutt.candk.asn.au', 'blackwater.candk.asn.au', 'blackwaterccc.candk.asn.au', 'blackwaterk.candk.asn.au', 'blueskies.candk.asn.au', 'bluewater.candk.asn.au', 'boonah.candk.asn.au', 'boondall.candk.asn.au', 'boopawerem.candk.asn.au', 'bribieisland.candk.asn.au', 'broadbeach.candk.asn.au', 'broadbeachwaters.candk.asn.au', 'brookesstreet.candk.asn.au', 'brownsplains.candk.asn.au', 'bulimba.candk.asn.au', 'bundaberg.candk.asn.au', 'bundabergk.candk.asn.au', 'bundabergsouth.candk.asn.au', 'bundabergtafe.candk.asn.au', 'bundara.candk.asn.au', 'burketown.candk.asn.au', 'burleighheads.candk.asn.au', 'burpengary.candk.asn.au', 'burragah.candk.asn.au', 'burrum.candk.asn.au', 'caboolture.candk.asn.au', 'cabooltureapex.candk.asn.au', 'caboolturetafe.candk.asn.au', 'cairns.candk.asn.au', 'cairnsearlyyears.candk.asn.au', 'calamvale.candk.asn.au', 'calliope.candk.asn.au', 'caloundra.candk.asn.au', 'caloundraccc.candk.asn.au', 'caloundrak.candk.asn.au', 'calvary.candk.asn.au', 'cambooya.candk.asn.au', 'camira.candk.asn.au', 'camphill.candk.asn.au', 'cannonhill.candk.asn.au', 'canungra.candk.asn.au', 'canungrak.candk.asn.au', 'capella.candk.asn.au', 'carbrook.candk.asn.au', 'carina.candk.asn.au', 'carindale.candk.asn.au', 'carolepark.candk.asn.au', 'carpentaria.candk.asn.au', 'carramar.candk.asn.au', 'carseldine.candk.asn.au', 'chapelhill.candk.asn.au', 'charleville.candk.asn.au', 'charterstowers.candk.asn.au', 'chelmergraceville.candk.asn.au', 'chinchilla.candk.asn.au', 'chiselhurst.candk.asn.au', 'christiestreet.candk.asn.au', 'churchstreet.candk.asn.au', 'clayfield.candk.asn.au', 'clermont.candk.asn.au', 'clinton.candk.asn.au', 'cloncurry.candk.asn.au', 'coen.candk.asn.au', 'collingwoodpark.candk.asn.au', 'collinsville.candk.asn.au', 'coo-inda.candk.asn.au', 'cooktown.candk.asn.au', 'coolangatta.candk.asn.au', 'coolum.candk.asn.au', 'coomera.candk.asn.au', 'coomerasprings.candk.asn.au', 'coorparoo.candk.asn.au', 'coralcoast.candk.asn.au', 'cottontree.candk.asn.au', 'craigslea.candk.asn.au', 'crescentlagoon.candk.asn.au', 'crestmead.candk.asn.au', 'crowsnest.candk.asn.au', 'dalbybeckstreet.candk.asn.au', 'deceptionbaynorth.candk.asn.au', 'dimbulah.candk.asn.au', 'dirranbi.candk.asn.au', 'durack.candk.asn.au', 'dysart.candk.asn.au', 'eaglebysouth.candk.asn.au', 'eastmackay.candk.asn.au', 'eastst.candk.asn.au', 'edmonton.candk.asn.au', 'eidsvold.candk.asn.au', 'eileenfisher.candk.asn.au', 'eimeo.candk.asn.au', 'elanora.candk.asn.au', 'emeraldsouth.candk.asn.au', 'emp.candk.asn.au', 'emupark.candk.asn.au', 'esk.candk.asn.au', 'estellecardiff.candk.asn.au', 'evertonpark.candk.asn.au', 'fairviewheights.candk.asn.au', 'flagstone.candk.asn.au', 'florence.candk.asn.au', 'forestview.candk.asn.au', 'gabbinbar.candk.asn.au', 'gap.candk.asn.au', 'gardencity.candk.asn.au', 'gaven.candk.asn.au', 'gayndah.candk.asn.au', 'gaythorne.candk.asn.au', 'geebung.candk.asn.au', 'georgebowen.candk.asn.au', 'gingin.candk.asn.au', 'gladstone.candk.asn.au', 'gladstonecc.candk.asn.au', 'gleberoad.candk.asn.au', 'glenden.candk.asn.au', 'glenmore.candk.asn.au', 'glenmorgan.candk.asn.au', 'glennieheights.candk.asn.au', 'goldcoast.candk.asn.au', 'goldcoastfdc.candk.asn.au', 'goondiwindi.candk.asn.au', 'gordonvale.candk.asn.au', 'greenbank.candk.asn.au', 'gumdale.candk.asn.au', 'gundoomirra.candk.asn.au', 'gympieroad.candk.asn.au', 'gympiesouth.candk.asn.au', 'happyvalley.candk.asn.au', 'hartystreet.candk.asn.au', 'hattonvale.candk.asn.au', 'headstart.candk.asn.au', 'herveybay.candk.asn.au', 'highfields.candk.asn.au', 'highland.candk.asn.au', 'highlandreserve.candk.asn.au', 'hollandpark.candk.asn.au', 'hollowaysbeach.candk.asn.au', 'homehill.candk.asn.au', 'hughenden.candk.asn.au', 'inala.candk.asn.au', 'indooroopilly.candk.asn.au', 'ingham.candk.asn.au', 'injilinji.candk.asn.au', 'innisfail.candk.asn.au', 'isabellaplains.candk.asn.au', 'isis.candk.asn.au', 'jacarandastreet.candk.asn.au', 'jamboree.candk.asn.au', 'jandowae.candk.asn.au', 'jellybeans.candk.asn.au', 'jinibara.candk.asn.au', 'julatten.candk.asn.au', 'juliacreek.candk.asn.au', 'karalee.candk.asn.au', 'kawana.candk.asn.au', 'kedronheights.candk.asn.au', 'kelso.candk.asn.au', 'kelvingrove.candk.asn.au', 'kenmorewest.candk.asn.au', 'kilcoy.candk.asn.au', 'kilkivan.candk.asn.au', 'kindercraft.candk.asn.au', 'kingaroy.candk.asn.au', 'kingston.candk.asn.au', 'kinkora.candk.asn.au', 'kipparing.candk.asn.au', 'kirwan.candk.asn.au', 'koobara.candk.asn.au', 'kookaburracreek.candk.asn.au', 'kookaburrasteiner.candk.asn.au', 'koolkuna.candk.asn.au', 'koolyangarra.candk.asn.au', 'kruger.candk.asn.au', 'kuca.candk.asn.au', 'kulila.candk.asn.au', 'kuluin.candk.asn.au', 'kumbia.candk.asn.au', 'kura.candk.asn.au', 'kurilpa.candk.asn.au', 'kutjala.candk.asn.au', 'labrador.candk.asn.au', 'laidley.candk.asn.au', 'lakeview.candk.asn.au', 'leichhardt.candk.asn.au', 'littlemiracles.candk.asn.au', 'loganreserve.candk.asn.au', 'loganvillage.candk.asn.au', 'longreach.candk.asn.au', 'lowerherbert.candk.asn.au', 'lowerherbet.candk.asn.au', 'lowood.candk.asn.au', 'lutwychewindsor.candk.asn.au', 'mackay.candk.asn.au', 'mackaynorth.candk.asn.au', 'maclagan.candk.asn.au', 'magneticisland.candk.asn.au', 'malanda.candk.asn.au', 'maleny.candk.asn.au', 'manly.candk.asn.au', 'maranoa.candk.asn.au', 'marchantpark.candk.asn.au', 'mareeba.candk.asn.au', 'marian.candk.asn.au', 'maroochy.candk.asn.au', 'maroochydore.candk.asn.au', 'maroochyfdc.candk.asn.au', 'maroochyihc.candk.asn.au', 'maryborough.candk.asn.au', 'meandarra.candk.asn.au', 'mermaidwaters.candk.asn.au', 'middlemount.candk.asn.au', 'millmerran.candk.asn.au', 'mirambeena.candk.asn.au', 'mitchell.candk.asn.au', 'monto.candk.asn.au', 'mooloolaba.candk.asn.au', 'mooloolah.candk.asn.au', 'moorooka.candk.asn.au', 'moranbah.candk.asn.au', 'mossman.candk.asn.au', 'mottpark.candk.asn.au', 'mountaincreek.candk.asn.au', 'mountwarren.candk.asn.au', 'moura.candk.asn.au', 'mourilyan.candk.asn.au', 'mtcrosby.candk.asn.au', 'mtgravatteast.candk.asn.au', 'mtgravattwest.candk.asn.au', 'mtlouisa.candk.asn.au', 'mtwarrenpark.candk.asn.au', 'mudgeeraba.candk.asn.au', 'mundubbera.candk.asn.au', 'mungindi.candk.asn.au', 'murgon.candk.asn.au', 'murilla.candk.asn.au', 'nambourccc.candk.asn.au', 'nanango.candk.asn.au', 'napranum.candk.asn.au', 'narnia.candk.asn.au', 'nazareth.candk.asn.au', 'newmarket.candk.asn.au', 'ngundanoo.candk.asn.au', 'norfolkvillage.candk.asn.au', 'normanpark.candk.asn.au', 'northcaloundra.candk.asn.au', 'northsidefdc.candk.asn.au', 'nundah.candk.asn.au', 'oakey.candk.asn.au', 'oakleigh.candk.asn.au', 'olr.candk.asn.au', 'oonoonba.candk.asn.au', 'oxenford.candk.asn.au', 'paddington.candk.asn.au', 'paddington2.candk.asn.au', 'palmbeach.candk.asn.au', 'palmwoods.candk.asn.au', 'parklake.candk.asn.au', 'peregiansprings.candk.asn.au', 'pioneervalley.candk.asn.au', 'pittsworth.candk.asn.au', 'pomona.candk.asn.au', 'portdouglas.candk.asn.au', 'proserpine.candk.asn.au', 'queensbeach.candk.asn.au', 'queensstreet.candk.asn.au', 'quilpie.candk.asn.au', 'qutkelvingrove.candk.asn.au', 'railway.candk.asn.au', 'ravenshoe.candk.asn.au', 'redbankplains.candk.asn.au', 'redhill.candk.asn.au', 'redlands.candk.asn.au', 'regentspark.candk.asn.au', 'rochedalesouth.candk.asn.au', 'rockhamptonsouth.candk.asn.au', 'roderickstreet.candk.asn.au', 'rosalie.candk.asn.au', 'rosewooddistrict.candk.asn.au', 'rowesbay.candk.asn.au', 'salisbury.candk.asn.au', 'salisburyccc.candk.asn.au', 'samford.candk.asn.au', 'sandgate.candk.asn.au', 'sarina.candk.asn.au', 'sarinass.candk.asn.au', 'scottstreet.candk.asn.au', 'seaforth.candk.asn.au', 'sevenhills.candk.asn.au', 'shailerroad.candk.asn.au', 'sherwood.candk.asn.au', 'silkstonebaptist.candk.asn.au', 'sladepoint.candk.asn.au', 'snowwhite.candk.asn.au', 'southbanktafe.candk.asn.au', 'southerncross.candk.asn.au', 'southkolan.candk.asn.au', 'springfield.candk.asn.au', 'springsure.candk.asn.au', 'stanthorpe.candk.asn.au', 'stcatherines.candk.asn.au', 'steppingstones.candk.asn.au', 'stlucia.candk.asn.au', 'stonescorner.candk.asn.au', 'strathpine.candk.asn.au', 'stretton.candk.asn.au', 'stuartstreet.candk.asn.au', 'sunset.candk.asn.au', 'sunshinebeach.candk.asn.au', 'sussexstreet.candk.asn.au', 'tamborine.candk.asn.au', 'tannum.candk.asn.au', 'tannumsands.candk.asn.au', 'tara.candk.asn.au', 'taranganba.candk.asn.au', 'taroom.candk.asn.au', 'tarragindi.candk.asn.au', 'tarumbal.candk.asn.au', 'tewantin.candk.asn.au', 'tewantinccc.candk.asn.au', 'texas.candk.asn.au', 'tieri.candk.asn.au', 'tincanbay.candk.asn.au', 'tingalpa.candk.asn.au', 'toobeah.candk.asn.au', 'toogoolawah.candk.asn.au', 'trinitybeach.candk.asn.au', 'tully.candk.asn.au', 'twintowns.candk.asn.au', 'umtgravatt.candk.asn.au', 'valley.candk.asn.au', 'veralacaze.candk.asn.au', 'wagnerroad.candk.asn.au', 'walkerston.candk.asn.au', 'walkervale.candk.asn.au', 'wallaville.candk.asn.au', 'wandarrah.candk.asn.au', 'wandoan.candk.asn.au', 'waratahcrescent.candk.asn.au', 'warwick.candk.asn.au', 'waterford.candk.asn.au', 'wavellheights.candk.asn.au', 'weipa.candk.asn.au', 'weir.candk.asn.au', 'westchermside.candk.asn.au', 'westend.candk.asn.au', 'westernsuburbs.candk.asn.au', 'westmar.candk.asn.au', 'westmoreton.candk.asn.au', 'whiterock.candk.asn.au', 'whitfield.candk.asn.au', 'whitsunday.candk.asn.au', 'willmore.candk.asn.au', 'wilston.candk.asn.au', 'wilstongrange.candk.asn.au', 'windaroo.candk.asn.au', 'wondai.candk.asn.au', 'woodcrest.candk.asn.au', 'woodford.candk.asn.au', 'woodhill.candk.asn.au', 'woodridgefdc.candk.asn.au', 'woodridgenorth.candk.asn.au', 'wujalwujal.candk.asn.au', 'www.moggillpetmotel.com.au', 'www.noosapetresort.com.au', 'wynnumgeneralgordon.candk.asn.au', 'wynnummanly.candk.asn.au', 'yamanto.candk.asn.au', 'yandina.candk.asn.au', 'yarraman.candk.asn.au', 'yelangi.candk.asn.au', 'yeppoon.candk.asn.au', 'yerongapark.candk.asn.au', 'yorkeysknob.candk.asn.au', 'yuingi.candk.asn.au', 'yungaburra.candk.asn.au');
+
+	// Get all centers
+	$query = new EntityFieldQuery;
+	$result = $query
+		->entityCondition('entity_type', 'node')
+		->propertyCondition('status', 1)
+		->propertyCondition('type', 'centre')
+		//->fieldCondition('field_answer_qstnref', 'nid', $qstnref, '=')
+		//->fieldCondition('field_answer_companyref', 'nid', $companyNID, '=')
+		->execute();
+	
+	$txt_result = array('urls_added' => array(), 'centres_not_found' => array(),'centres_skipped' => array(),  'search_string' => array(),);
+	if (is_array($result) && isset($result['node'])) {
+		$centers = node_load_multiple(array_keys($result['node']));
+		//dpm(array_search('amberley', $urls, false));
+		
+		$saveflag = false;
+		foreach($centers as $center) {
+			$titleBreak = explode(' ', $center->title);
+			$search_line = strtolower((($titleBreak[2] != 'Kindergarten')
+										&& ($titleBreak[2] != 'Community')
+										&& ($titleBreak[2] != 'Preschool')
+										&& ($titleBreak[2] != 'Family')
+										&& ($titleBreak[2] != 'Street')
+										&& ($titleBreak[2] != 'Beach')
+										&& ($titleBreak[2] != '&')
+										&& ($titleBreak[2] != 'District')
+										)?$titleBreak[1].$titleBreak[2]:$titleBreak[1]);
+			//$dearchline = $titleBreak[1]);
+			
+			array_push($txt_result['search_string'], $search_line);
+
+
+			foreach ($urls as $key => $url) {
+				if (strpos($urls[$key], $search_line) !== false) {
+					if (!is_array($center->field_centre_old_url)) {
+						$center->field_centre_old_url = array();
+					}
+					if (!count($center->field_centre_old_url) ||
+						empty($center->field_centre_old_url['und'][0]['value'])) {
+						$center->field_centre_old_url = array(
+							'und' => array(
+								0 => array(
+									'value' => $urls[$key],
+									'format' => NULL,
+									'safe_value' => $urls[$key],
+								)
+							)
+						);
+						node_save($center);
+						$saveflag = true;
+						$txt_result['urls_added'] = array_merge($txt_result['urls_added'], array($urls[$key] => $center->title));
+					}
+					else {
+						$txt_result['centres_skipped'] = array_merge($txt_result['centres_skipped'], array($center->nid => $center->title));
+					}
+					break;
+				}
+			}
+			
+			if (!$saveflag) {
+				$txt_result['centres_not_found'] = array_merge($txt_result['centres_not_found'], array($center->nid => $center->title));
+			}
+			$saveflag = false;
+		}
+	}
+	dpm($txt_result);
+	
+	return 'Page';
+}
+
+function data_migration_process_data() {
+	
+	// Get all centers
+	$query = new EntityFieldQuery;
+	$result = $query
+		->entityCondition('entity_type', 'node')
+		->propertyCondition('status', 1)
+		->propertyCondition('type', 'centre')
+		//->fieldCondition('field_answer_qstnref', 'nid', $qstnref, '=')
+		//->fieldCondition('field_answer_companyref', 'nid', $companyNID, '=')
+		->execute();
+	
+	$txt_result = array();
+	if (is_array($result) && isset($result['node'])) {
+		//$centers = node_load_multiple(array_keys($result['node']));
+		variable_set('data_migration_centres', $result['node']); 
+		
+		unset($_SESSION['data_migration_batch_results']);
+		$batch = array(
+			'title' => t('Importing data from old CandK site'),
+			'operations' => array(
+				array('data_migration_batch_process_data', array()),
+			),
+			'finished' => 'data_migration_batch_process_complete',
+			//'file' => 'path_to_file_containing_myfunctions',
+		);
+		batch_set($batch);
+		batch_process();
+	}
+}
+
+function data_migration_batch_process_complete($success, $results, $operations){
+	
+	// The 'success' parameter means no fatal PHP errors were detected. All
+	// other error management should be handled using 'results'.
+	if ($success) {
+		//$message = format_plural(count($results), 'One documentaries processed.', '@count documentaries processed.');
+		$message = format_plural(count($results['completed']), 'One centre processed.', '@count centres processed.').'<br/>'.format_plural(count($results['failed']), 'One centre failed.', '@count centres failed.');
+	}
+	else {
+		$message = t('Finished with an error.');
+	}
+	drupal_set_message($message);
+	// Providing data for the redirected page is done through $_SESSION.
+	//$items = array();
+	//foreach ($results as $result) {
+	// $items[] = 'scraped '.$result;
+	//}
+	//$_SESSION['doco_batch_results'] = $items;
+	
+	$_SESSION['data_migration_batch_results'] = $results;
+	
+	drupal_goto('ifimport/run/finito');
+}
+
+function data_migration_batch_process_data(&$context) { 
+
+	require_once('simple_html_dom.php');
+	
+	// Setup batch vars
+	$centers = variable_get('data_migration_centres', array());
+	if (empty($context['sandbox'])) {
+		$context['sandbox']['progress'] = 0;
+		//$context['sandbox']['taxonomy'] = taxonomy_get_tree(1);
+		//$context['sandbox']['current_doc'] = '';
+		$context['sandbox']['max'] = count($centers);
+		//$context['sandbox']['max'] = 20;
+	}
+	
+	if(empty($context['results']['completed'])){
+		$context['results']['completed'] = array();
+	}
+	if(empty($context['results']['failed'])){
+		$context['results']['failed'] = array();
+	}
+	if(empty($context['results']['errors'])){
+		$context['results']['failed'] = array();
+	}
+
+	$keys = array_keys($centers);
+	$center = node_load($keys[$context['sandbox']['progress']]);
+		
+	// Process data
+	$titles = '';
+	$saveflag = false;
+	//foreach($centers as $center) {	
+	try {	
+		if (!empty($center->field_centre_old_url['und'][0]['value'])) {
+			
+			
+			$docpage = new simple_html_dom();
+			$docpage->load_file('http://'.$center->field_centre_old_url['und'][0]['value']);
+			
+			// For main information
+			foreach($docpage->find('table.conFastFacts') as $field){
+				$html = new simple_html_dom();
+				$html->load($field);
+				foreach ($html->find('span.Head') as $title) {
+					$titles .= '[<strong>' . strtoupper($title->innertext) . '</strong>]<br />';
+					// '.DNN_HTMLContent .Normal'
+					$titleFixed = trim($title->innertext);
+					if ($titleFixed == 'Fax') {
+						$resCont = stripLineContent(grabfirstContent($html, '.DNN_HTMLContent .Normal'));
+						$titles .= $resCont;
+						if ($resCont && !empty($resCont) && empty($center->field_centre_fax['und'][0]['value'])) {
+							$center->field_centre_fax = array(
+								'und' => array(
+									0 => array(
+										'value' => $resCont,
+										'format' => NULL,
+										'safe_value' => $resCont,
+									)
+								)
+							);
+							$txt_result = array_merge($txt_result, array($center->field_centre_old_url['und'][0]['value'] .':: '. $titleFixed . ' added '. $center->title));
+							$saveflag = true;
+						}
+						else {
+							$txt_result = array_merge($txt_result, array($center->field_centre_old_url['und'][0]['value'] .':: '. $titleFixed . ' NOT added '. $center->title));
+						}
+					}
+					else if ($titleFixed == 'Email') {
+						$resCont = stripLineContent(grabfirstContent($html, '.DNN_HTMLContent .Normal'));
+						$titles .= $resCont;
+						if ($resCont && !empty($resCont) && empty($center->field_centre_email['und'][0]['value'])) {
+							$center->field_centre_email = array(
+								'und' => array(
+									0 => array(
+										'value' => $resCont,
+										'format' => NULL,
+										'safe_value' => $resCont,
+									)
+								)
+							);
+							$txt_result = array_merge($txt_result, array($center->field_centre_old_url['und'][0]['value'] .':: '. $titleFixed . ' added '. $center->title));
+							$saveflag = true;
+						}
+						else {
+							$txt_result = array_merge($txt_result, array($center->field_centre_old_url['und'][0]['value'] .':: '. $titleFixed . ' NOT added '. $center->title));
+						}
+					}
+					else if ($titleFixed == 'Vacancies') {
+						$resCont = stripHTMLContent(grabfirstContent($html, '.DNN_HTMLContent .Normal'));
+						$titles .= $resCont;
+						if ($resCont && !empty($resCont) && empty($center->field_centre_vacancies['und'][0]['value'])) {
+							$center->field_centre_vacancies = array(
+								'und' => array(
+									0 => array(
+										'value' => $resCont,
+										'format' => 'filtered_html',
+										'safe_value' => str_replace('&nbsp;', '', $resCont),
+									)
+								)
+							);
+							$txt_result = array_merge($txt_result, array($center->field_centre_old_url['und'][0]['value'] .':: '. $titleFixed . ' added '. $center->title));
+							$saveflag = true;
+						}
+						else {
+							$txt_result = array_merge($txt_result, array($center->field_centre_old_url['und'][0]['value'] .':: '. $titleFixed . ' NOT added '. $center->title));
+						}
+					}
+					else if ($titleFixed == 'Fee summary') {
+						$resCont = stripHTMLContent(grabfirstContent($html, '.DNN_HTMLContent .Normal'));
+						$titles .= $resCont;
+						if ($resCont && !empty($resCont) && empty($center->field_centre_fees['und'][0]['value'])) {
+							$center->field_centre_fees = array(
+								'und' => array(
+									0 => array(
+										'value' => $resCont,
+										'format' => 'filtered_html',
+										'safe_value' => str_replace('&nbsp;', '', $resCont),
+									)
+								)
+							);
+							$txt_result = array_merge($txt_result, array($center->field_centre_old_url['und'][0]['value'] .':: '. $titleFixed . ' added '. $center->title));
+							$saveflag = true;
+						}
+						else {
+							$txt_result = array_merge($txt_result, array($center->field_centre_old_url['und'][0]['value'] .':: '. $titleFixed . ' NOT added '. $center->title));
+						}
+					}
+					
+					break;
+				}
+			}
+			
+			// News and events
+			foreach($docpage->find('#dnn_ContentPane .conHead') as $id => $field){
+				$titleFixed = trim(strip_tags($field->innertext));
+				$content = $docpage->find('#dnn_ContentPane .DNN_HTMLContent .Normal', $id)->innertext;
+				if ($titleFixed == 'News') {
+					$resCont = stripHTMLContent($content);
+					$titles .= $resCont;
+					if ($resCont && !empty($resCont) && empty($center->field_centre_news['und'][0]['value'])) {
+						$center->field_centre_news = array(
+							'und' => array(
+								0 => array(
+									'value' => $resCont,
+									'format' => 'filtered_html',
+									'safe_value' => str_replace('&nbsp;', '', $resCont),
+								)
+							)
+						);
+						$txt_result = array_merge($txt_result, array($center->field_centre_old_url['und'][0]['value'] .':: '. $titleFixed . ' added '. $center->title));
+						$saveflag = true;
+					}
+					else {
+						$txt_result = array_merge($txt_result, array($center->field_centre_old_url['und'][0]['value'] .':: '. $titleFixed . ' NOT added '. $center->title));
+					}
+				}
+				else if ($titleFixed == 'Events') {
+					$resCont = stripHTMLContent($content);
+					$titles .= $resCont;
+					if ($resCont && !empty($resCont) && empty($center->field_centre_events['und'][0]['value'])) {
+						$center->field_centre_events = array(
+							'und' => array(
+								0 => array(
+									'value' => $resCont,
+									'format' => 'filtered_html',
+									'safe_value' => str_replace('&nbsp;', '', $resCont),
+								)
+							)
+						);
+						$txt_result = array_merge($txt_result, array($center->field_centre_old_url['und'][0]['value'] .':: '. $titleFixed . ' added '. $center->title));
+						$saveflag = true;
+					}
+					else {
+						$txt_result = array_merge($txt_result, array($center->field_centre_old_url['und'][0]['value'] .':: '. $titleFixed . ' NOT added '. $center->title));
+					}
+				}
+			}
+	
+			if ($saveflag) {
+				node_save($center);
+				$context['message'] = 'Saving centre '.$context['sandbox']['progress'].' of '.$context['sandbox']['max'].' from '.$urls[$context['sandbox']['progress']];
+			}
+			else {
+				$context['message'] = 'Skipping centre '.$context['sandbox']['progress'].' of '.$context['sandbox']['max'].' from '.$urls[$context['sandbox']['progress']] . ' No data was changed.';
+			}
+		}
+		else {
+			$txt_result = array_merge($txt_result, array('Warning:: No URL for:: '. $center->title));
+			$context['message'] = 'Skipping centre '.$context['sandbox']['progress'].' of '.$context['sandbox']['max'].' from '.$urls[$context['sandbox']['progress']] . ' No URL found.';
+		}
+
+			
+		$saveflag = false;
+		
+		
+	}catch(Exception $e){
+		$context['results']['errors'][] = $e->getMessage();
+	}
+	//}
+//}
+
+//dpm($txt_result); // Move to bottom return later
+//return $titles; // Just one at a time	
+//return 'Page';
+	$context['sandbox']['progress']++;
+	
+	if ($context['sandbox']['progress'] != $context['sandbox']['max']) {
+		$context['finished'] = $context['sandbox']['progress'] / $context['sandbox']['max'];
+	}
+}
+
+function data_migration_process_finito() {
+	return 'Finito la comedia!';
+}
+
+function grabfirstContent($domContent, $selector) {
+	foreach ($domContent->find($selector) as $content) {
+		return $content;
+	}
+	return false;
+}
+
+function safeFilename($strFile) {
+	$strFile = str_replace('&nbsp;', '_', $strFile);
+	$strFile = str_replace('%20', '_', $strFile);
+	$strFile = str_replace('-', '_', $strFile);
+	$strFile = str_replace('%', '', $strFile);
+	$strFile = str_replace('&', '', $strFile);
+	$strFile = str_replace('(', '', $strFile);
+	$strFile = str_replace(')', '', $strFile);
+	return $strFile; 
+}
+
+function safeDir($strFile) {
+	$strFile = str_replace('&nbsp;', '_', $strFile);
+	$strFile = str_replace('%20', '_', $strFile);
+	$strFile = str_replace(' ', '_', $strFile);
+	$strFile = str_replace('&amp;', '', $strFile);
+	$strFile = str_replace('&', '', $strFile);
+	$strFile = str_replace('-', '', $strFile);
+	$strFile = str_replace('(', '', $strFile);
+	$strFile = str_replace(')', '', $strFile);
+	return substr(trim($strFile), 0, (strlen($strFile) > 10)?10:(strlen($strFile))); 
+}
+
+function stripLineContent($strHTML) {
+	$strHTML = str_replace('&nbsp;', '', $strHTML);
+	return substr(trim(strip_tags($strHTML)), 0, 200); // take care of length
+}
+
+function stripHTMLContent($strHTML) {
+	$strHTML = str_replace('&nbsp;', '', $strHTML);
+	$strHTML = str_replace('<b>', '<strong><b>', $strHTML);
+	$strHTML = str_replace('<b ', '<strong><b ', $strHTML);
+	$strHTML = str_replace('</b>', '</b></strong>', $strHTML);
+	$strHTML = str_replace('</p>', '<br />', $strHTML);
+	$strHTML = str_replace('<tr>', '<tr><br />', $strHTML);
+	$strHTML = str_replace('<tr ', '<br /><tr ', $strHTML);
+	$strHTML = str_replace("<br />\n<br />", '<br>', $strHTML);
+	return trim(strip_tags($strHTML, '<br><a><strong><i>'));
+}
+
