@@ -30,6 +30,12 @@ function data_migration_menu(){
 		'access callback' => true, 
 		//'access arguments' => array('administer site configuration'),
 	);
+	$items['ifimport/stat/images'] = array(
+		'title' => 'Get statistics on images',
+		'page callback' => 'data_migration_process_image_stats',
+		'access callback' => true, 
+		//'access arguments' => array('administer site configuration'),
+	);
 	$items['ifimport/run/finito'] = array(
 		'title' => 'Finito!',
 		'access callback' => true, 
@@ -38,6 +44,110 @@ function data_migration_menu(){
 	);
 	return $items;
 }
+
+function data_migration_process_image_stats() { 
+	
+	// Get all centers
+	$query = new EntityFieldQuery;
+	$result = $query
+		->entityCondition('entity_type', 'node')
+		->propertyCondition('status', 1)
+		->propertyCondition('type', 'centre')
+		//->fieldCondition('field_answer_qstnref', 'nid', $qstnref, '=')
+		//->fieldCondition('field_answer_companyref', 'nid', $companyNID, '=')
+		->execute();
+	
+	$txt_result = array();
+	if (is_array($result) && isset($result['node'])) {
+		//$centers = node_load_multiple(array_keys($result['node']));
+		variable_set('data_migration_centres', $result['node']); 
+		
+		if(isset($_SESSION['data_migration_batch_results'])){
+		  unset($_SESSION['data_migration_batch_results']);
+		}
+		$batch = array(
+			'title' => t('Getting statistics on images images from old CandK sites'),
+			'operations' => array(
+				array('data_migration_process_image_stats_data', array()),
+			),
+			'finished' => 'data_migration_batch_process_complete',
+			//'file' => 'path_to_file_containing_myfunctions',
+		);
+		batch_set($batch);
+		batch_process();
+	}
+}
+
+function data_migration_process_image_stats_data(&$context) { 
+
+	require_once('simple_html_dom.php');
+	
+	// Setup batch vars
+	$centers = variable_get('data_migration_centres', array());
+	if (empty($context['sandbox'])) {
+		$context['sandbox']['progress'] = 0;
+		//$context['sandbox']['taxonomy'] = taxonomy_get_tree(1);
+		//$context['sandbox']['current_doc'] = '';
+		$context['sandbox']['max'] = count($centers);
+		//$context['sandbox']['max'] = 20;
+	}
+	
+	if(empty($context['results']['completed'])){
+		$context['results']['completed'] = array();
+	}
+	if(empty($context['results']['failed'])){
+		$context['results']['failed'] = array();
+	}
+	if(empty($context['results']['errors'])){
+		$context['results']['errors'] = array();
+	}
+
+	$keys = array_keys($centers);
+	$center = node_load($keys[$context['sandbox']['progress']]);
+	
+	$txt_result = array();
+	$saveflag = false;
+	
+	try {
+		if (!empty($center->field_centre_old_url['und'][0]['value'])) {
+			$docpage = new simple_html_dom();
+			$siteurl = 'http://'.$center->field_centre_old_url['und'][0]['value'];
+			$docpage->load_file($siteurl . '/Photos.aspx');
+			
+			//$res_images = $center->title.'<br />'.$center->field_centre_old_url['und'][0]['value'].'<br />';
+			//$centredir = safeDir($center->title);
+			//$countpics = count($docpage->find('#dnn_ContentPane img'));
+			
+			// For main information
+			$counter = 0;
+			foreach($docpage->find('#dnn_ContentPane img') as $image) {
+				$counter++;
+			}
+			
+			$context['results']['completed'][] = $counter . '::' .$center->nid .':::'. $center->title;
+
+			
+			// got undefined error on $urls
+			//$context['message'] = 'Saving centre '.$context['sandbox']['progress'].' of '.$context['sandbox']['max'].' from '.$urls[$context['sandbox']['progress']];
+			$context['message'] = 'Checked '.$siteurl.' centre ('.$context['sandbox']['progress'].' of '.$context['sandbox']['max'].' )' ;
+			
+		}
+	}catch(Exception $e){
+		$context['results']['errors'][] = $e->getMessage();
+	}
+	//}
+//}
+
+//dpm($txt_result); // Move to bottom return later
+//return $titles; // Just one at a time	
+//return 'Page';
+	$context['sandbox']['progress']++;
+	
+	if ($context['sandbox']['progress'] != $context['sandbox']['max']) {
+		$context['finished'] = $context['sandbox']['progress'] / $context['sandbox']['max'];
+	}
+}
+
 
 function data_migration_process_images() { 
 	
@@ -100,105 +210,149 @@ function data_migration_process_images_data(&$context) {
 	$center = node_load($keys[$context['sandbox']['progress']]);
 	
 	$txt_result = array();
-	//if (is_array($result) && isset($result['node'])) {
-		
-	//require_once('simple_html_dom.php');
-//$centers = $result['node'];
-
-//foreach($centers as $nid => $center_strip) {	
-	//$center = node_load($nid);
+	$saveflag = false;
+	
 	try {
-	if (!empty($center->field_centre_old_url['und'][0]['value'])) {
-		$docpage = new simple_html_dom();
-		$siteurl = 'http://'.$center->field_centre_old_url['und'][0]['value'];
-		$docpage->load_file($siteurl . '/Photos.aspx');
-		
-		$res_images = $center->title.'<br />'.$center->field_centre_old_url['und'][0]['value'].'<br />';
-		
-		$centredir = safeDir($center->title);
-		
-		// For main information
-		foreach($docpage->find('#dnn_ContentPane img') as $image) {
-			$imgurl = $siteurl . $image->getAttribute('src');
+		if (!empty($center->field_centre_old_url['und'][0]['value'])) {
+			$docpage = new simple_html_dom();
+			$siteurl = 'http://'.$center->field_centre_old_url['und'][0]['value'];
+			$docpage->load_file($siteurl . '/Photos.aspx');
 			
-			// Save actual file
-			$res_images .=  $imgurl . '<br />';
+			$res_images = $center->title.'<br />'.$center->field_centre_old_url['und'][0]['value'].'<br />';
 			
-			$handle = fopen($imgurl, "rb");
-			$contents = '';
-			while (!feof($handle)) {
-				 $contents .= fread($handle, 8192);
-			}
-			fclose($handle);
-
-			$filename_break = explode('/', $imgurl);
-			$filename_new = safeFilename($filename_break[count($filename_break) - 1]);
-			$full_foldername = 'sites/default/files/centres/' . $centredir;
-			$full_filename = $full_foldername .'/' . $filename_new;
-
-			if (!file_exists($full_foldername))
-				drupal_mkdir($full_foldername, NULL, true);
-			while (file_exists($full_filename)) {
-				$filename_new = 'a_' . $filename_new;
-				$full_filename = $full_foldername .'/' . $filename_new;
-			}
+			$centredir = safeDir($center->title);
 			
-			$fp = fopen($full_filename, 'w');
-			fwrite($fp, $contents);
-			fclose($fp);
-			
-			
-			// Save file to system
-			
-			$imginfo = image_get_info($full_filename);
-			
-			$newFile = new stdClass();
-			$newFile->fid = 0;
-			$newFile->uid = 1;
-			$newFile->filename = $filename_new;
-			$newFile->uri = 'public://centres/' . $centredir .'/'. $filename_new;
-			$newFile->filemime = ($imginfo)?$imginfo['mime_type']:'image/jpeg';
-			$newFile->filesize = ($imginfo)?$imginfo['file_size']:0;
-			$newFile->status = 1;
-			$newFile->timestamp = time();
-			//$newFile->filesize = filesize($full_filename);
-			
-			$newFile = file_save($newFile);
-			file_usage_add($newFile, 'file', 'node', $center->nid);
-			
-			if (empty($center->field_centre_pics['und'][0])) {
-				$center->field_centre_pics = array('und' => array());
-			}
+			// For main information
+			foreach($docpage->find('#dnn_ContentPane img') as $image) {
 				
-			$center->field_centre_pics['und'][] = array(
-							'fid' => $newFile->fid,
-							'alt' => '',
-							'title' => '',
-							'width' => ($imginfo)?$imginfo['width']:0,
-							'height' => ($imginfo)?$imginfo['height']:0,
-							'uid' => $newFile->uid,
-							'filename' => $newFile->filename,
-							'uri' => $newFile->uri,
-							'filemime' => $newFile->filemime,
-							'filesize' => $newFile->filesize,
-							'status' => $newFile->status,
-							'timestamp' => $newFile->timestamp,
-							'rdf_mapping' => array(),
-						);
+				// rawurlencode to be able to read spaces and other special characters
+				// only encode filename
+				$partsRemote = explode('/', $image->getAttribute('src'));
+				$newSource = str_replace(' ', '%20', $image->getAttribute('src'));
+				$newSource = str_replace('&amp;', '&', $newSource);// need not encoded ampersand to work
+				//$newSource = str_replace($partsRemote[count($partsRemote)-1], 
+				//							rawurlencode($partsRemote[count($partsRemote)-1]), 
+				//							$image->getAttribute('src'));
+				$imgurl = (strpos($newSource, 'http://') !== false)?$newSource:($siteurl . $newSource);
+				//$imgurl = str_replace('&amp;', '&', $imgurl); 
+				
+				// Save actual file
+				$res_images .=  $imgurl . '<br />';
+				
+				$remoteimginfo = image_get_info($imgurl);
+				if ($remoteimginfo['file_size'] > 2000000) {
+					$wmsg =  'Image is begger than 2Mb: ' . $imgurl;
+					$context['results']['failed'][] = $wmsg;
+					watchdog('Data Migration', $wmsg, array(), WATCHDOG_WARNING);
+					continue;
+				}
+				
+				watchdog('Data Migration', 'Reading remote file %filename', array('%filename' => ($imgurl), 'nid' => $center->nid, 'title' => $center->title), WATCHDOG_DEBUG);
+				$handle = fopen($imgurl, "rb");
+				if ($handle !== false) {
+					$contents = '';
+					while (!feof($handle)) {
+						 $contents .= fread($handle, 8192);
+					}
+					fclose($handle);
+		
+					$filename_break = explode('/', $imgurl);
+					$filename_new = safeFilename($filename_break[count($filename_break) - 1]);
+					$full_foldername = 'sites/default/files/centres/' . $centredir;
+					$full_filename = $full_foldername .'/' . $filename_new;
+		
+					if (!file_exists($full_foldername)) {
+						drupal_mkdir($full_foldername, NULL, true);
+						watchdog('Data Migration', 'Created directory %foldername', array('%foldername' => $full_foldername, 'nid' => $center->nid, 'title' => $center->title), WATCHDOG_DEBUG);
+					}
+					if (file_exists($full_filename)) {
+						$wmsg = 'Image already exists: ' . $full_filename;
+						$context['results']['failed'][] = $wmsg;
+						watchdog('Data Migration', $wmsg, array(), WATCHDOG_WARNING);
+						continue;
+					}
+					
+					watchdog('Data Migration', 'Writing file %filename', array('%filename' => $full_filename, 'nid' => $center->nid, 'title' => $center->title), WATCHDOG_DEBUG);
+					$fp = fopen($full_filename, 'w');
+					fwrite($fp, $contents);
+					fclose($fp);
+	
+					$saveflag = true;
+					// Save file to system
+					$imginfo = image_get_info($full_filename);
+					
+					$newFile = new stdClass();
+					$newFile->fid = 0;
+					$newFile->uid = 1;
+					$newFile->filename = $filename_new;
+					$newFile->uri = 'public://centres/' . $centredir .'/'. $filename_new;
+					$newFile->filemime = ($imginfo)?$imginfo['mime_type']:'image/jpeg';
+					$newFile->filesize = ($imginfo)?$imginfo['file_size']:0;
+					$newFile->status = 1;
+					$newFile->timestamp = time();
+					//$newFile->filesize = filesize($full_filename);
+					
+					// Check if file is in database already
+					$fileQuery = new EntityFieldQuery;
+					$existingFile = $fileQuery
+						->entityCondition('entity_type', 'file')
+						->propertyCondition('uri', $newFile->uri)
+						->execute();
+					if (is_array($existingFile) && isset($existingFile['node'])) {
+						// Get the file file found (should be unique)
+						foreach ($existingFile['node'] as $existingFile) {
+							$newFile = file_load($existingFile->fid);
+							break;
+						}
+					}
+					
+					if (!$newFile->fid) {
+						$newFile = file_save($newFile);
+					}
+					
+					file_usage_add($newFile, 'file', 'node', $center->nid);
+					
+					if (empty($center->field_centre_pics['und'][0])) {
+						$center->field_centre_pics = array('und' => array());
+					}
+						
+					$center->field_centre_pics['und'][] = array(
+									'fid' => $newFile->fid,
+									'alt' => '',
+									'title' => '',
+									'width' => ($imginfo)?$imginfo['width']:0,
+									'height' => ($imginfo)?$imginfo['height']:0,
+									'uid' => $newFile->uid,
+									'filename' => $newFile->filename,
+									'uri' => $newFile->uri,
+									'filemime' => $newFile->filemime,
+									'filesize' => $newFile->filesize,
+									'status' => $newFile->status,
+									'timestamp' => $newFile->timestamp,
+									'rdf_mapping' => array(),
+								);
+				
+				} 
+				else {
+					watchdog('Data Migration', 'Cannot read file %filename', array('%filename' => $imgurl, 'nid' => $center->nid, 'title' => $center->title, 'remote_url' => $siteurl), WATCHDOG_ERROR);
+					continue; // unnecessary for now unless more content added on the bottom
+				}
+				
+			}
 			
+			if ($saveflag) {
+				node_save($center);
+				watchdog('Data Migration', 'Center saved: [%nid] %title', array('%nid' => $center->nid, '%title' => $center->title), WATCHDOG_DEBUG);
+			}
+			else {
+				watchdog('Data Migration', 'Center NOT saved: [%nid] %title', array('%nid' => $center->nid, '%title' => $center->title), WATCHDOG_DEBUG);
+			}
 			
-			
-			//return $res_images;
+			// got undefined error on $urls
+			//$context['message'] = 'Saving centre '.$context['sandbox']['progress'].' of '.$context['sandbox']['max'].' from '.$urls[$context['sandbox']['progress']];
+			$context['message'] = 'Saved '.$siteurl.' centre ('.$context['sandbox']['progress'].' of '.$context['sandbox']['max'].' )' ;
 			
 		}
-		
-		node_save($center);
-		
-		// got undefined error on $urls
-		//$context['message'] = 'Saving centre '.$context['sandbox']['progress'].' of '.$context['sandbox']['max'].' from '.$urls[$context['sandbox']['progress']];
-		$context['message'] = 'Saving centre '.$context['sandbox']['progress'].' of '.$context['sandbox']['max'].' from '.$siteurl;
-		
-	}
 	}catch(Exception $e){
 		$context['results']['errors'][] = $e->getMessage();
 	}
@@ -350,6 +504,8 @@ function data_migration_batch_process_complete($success, $results, $operations){
 	//$_SESSION['doco_batch_results'] = $items;
 	
 	$_SESSION['data_migration_batch_results'] = $results;
+	
+	dpm($results);
 	
 	drupal_goto('ifimport/run/finito');
 }
@@ -595,7 +751,7 @@ function safeDir($strFile) {
 	$strFile = str_replace('-', '', $strFile);
 	$strFile = str_replace('(', '', $strFile);
 	$strFile = str_replace(')', '', $strFile);
-	return substr(trim($strFile), 0, (strlen($strFile) > 10)?10:(strlen($strFile))); 
+	return substr(trim($strFile), 0, (strlen($strFile) > 20)?20:(strlen($strFile))); 
 }
 
 function stripLineContent($strHTML) {
