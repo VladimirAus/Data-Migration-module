@@ -1,7 +1,7 @@
 28-May-2012
 
 Drupal module for client:
-- Example of Drupal batch setup
+- Example of Drupal 7 batch setup
 - URL assignment to nodes
 - Batch script reads external page and parses it using simple DOM, strips data from the page and saves it to Drupal
 - Batch script scans page for images and saves them into website files folder based on the node
